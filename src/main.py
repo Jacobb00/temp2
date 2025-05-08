@@ -85,7 +85,19 @@ def main():
     
     # Model parameters
     node_features_dim = data_dict['node_features'].shape[1]
-    edge_features_dim = 1  # Edge type
+    
+    # Check the actual edge feature dimensions
+    if data_splits and hasattr(data_splits[0][0], 'edge_attr') and data_splits[0][0].edge_attr is not None:
+        if len(data_splits[0][0].edge_attr.shape) > 1:
+            edge_features_dim = data_splits[0][0].edge_attr.shape[1]  # Use actual dimension
+        else:
+            edge_features_dim = 1  # Single feature
+    else:
+        edge_features_dim = 1  # Default to 1 if no edge features
+        
+    print(f"Node features dimension: {node_features_dim}")
+    print(f"Edge features dimension: {edge_features_dim}")
+    
     hidden_dim = args.hidden_dim
     output_dim = args.output_dim
     

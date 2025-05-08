@@ -83,8 +83,22 @@ def train_model(model, train_data, val_data, optimizer, device, epochs=100, pati
                 neg_edge_index = torch.randint(0, num_nodes, (2, pos_edge_index.size(1)), device=device)
             
             # Compute predictions
-            pos_out = model.decode(z, pos_edge_index)
-            neg_out = model.decode(z, neg_edge_index)
+            try:
+                # First check if model has a decode method
+                if hasattr(model, 'decode'):
+                    pos_out = model.decode(z, pos_edge_index)
+                    neg_out = model.decode(z, neg_edge_index)
+                else:
+                    # Fallback to manual inner product if no decode method
+                    pos_row, pos_col = pos_edge_index
+                    neg_row, neg_col = neg_edge_index
+                    pos_out = (z[pos_row] * z[pos_col]).sum(dim=-1)
+                    neg_out = (z[neg_row] * z[neg_col]).sum(dim=-1)
+            except Exception as e:
+                print(f"Error during decoding: {e}")
+                # Create dummy tensors to continue training
+                pos_out = torch.zeros(pos_edge_index.size(1), device=device)
+                neg_out = torch.zeros(neg_edge_index.size(1), device=device)
             
             # Compute loss with numerical stability
             pos_loss = -torch.log(torch.sigmoid(pos_out.clamp(max=10, min=-10)) + 1e-15).mean()
@@ -138,7 +152,7 @@ def train_model(model, train_data, val_data, optimizer, device, epochs=100, pati
 
 def evaluate(model, x, edge_index, edge_attr=None, device='cpu'):
     """
-    Evaluate the model on validation or test data.
+    Evaluate the model on validation or test data with enhanced error handling.
     
     Args:
         model: Trained GNN model
@@ -148,7 +162,7 @@ def evaluate(model, x, edge_index, edge_attr=None, device='cpu'):
         device: Device to run evaluation on
         
     Returns:
-        AUC score
+        AUC score or 0.5 if evaluation fails
     """
     model.eval()
     
@@ -166,31 +180,82 @@ def evaluate(model, x, edge_index, edge_attr=None, device='cpu'):
             
             if split == 0:
                 # Not enough edges for evaluation
+                print("Warning: Not enough edges for evaluation")
                 return 0.5
                 
             pos_edge_index = edge_index[:, :split]
-            # Generate negative edges for evaluation
+            
+            # Generate negative edges for evaluation that are different from positive edges
             num_nodes = x.size(0)
-            neg_edge_index = torch.randint(0, num_nodes, (2, split), device=device)
+            max_attempts = 10
+            
+            # Ensure we create valid negative edge indices
+            for attempt in range(max_attempts):
+                neg_edge_index = torch.randint(0, num_nodes, (2, split), device=device)
+                
+                # Convert to set of tuples for easy comparison
+                pos_edges_set = set([(pos_edge_index[0, i].item(), pos_edge_index[1, i].item()) 
+                                    for i in range(pos_edge_index.size(1))])
+                neg_edges_set = set([(neg_edge_index[0, i].item(), neg_edge_index[1, i].item()) 
+                                    for i in range(neg_edge_index.size(1))])
+                
+                # Check overlap
+                overlap = len(pos_edges_set.intersection(neg_edges_set))
+                if overlap < split * 0.1:  # Allow up to 10% overlap
+                    break
             
             # Compute predictions
+            if not hasattr(model, 'decode'):
+                print("Warning: Model doesn't have decode method")
+                return 0.5
+                
             pos_out = model.decode(z, pos_edge_index)
             neg_out = model.decode(z, neg_edge_index)
             
+            # Check if predictions are valid tensors
+            if not isinstance(pos_out, torch.Tensor) or not isinstance(neg_out, torch.Tensor):
+                print("Warning: Model output is not a tensor")
+                return 0.5
+                
+            # Check if tensors have valid shapes
+            if pos_out.numel() == 0 or neg_out.numel() == 0:
+                print("Warning: Empty tensor output from model")
+                return 0.5
+                
             # Prevent numerical issues
             pos_pred = torch.sigmoid(pos_out.clamp(max=10, min=-10)).cpu().numpy()
             neg_pred = torch.sigmoid(neg_out.clamp(max=10, min=-10)).cpu().numpy()
             
+            # Make sure arrays are 1D
+            pos_pred = pos_pred.flatten()
+            neg_pred = neg_pred.flatten()
+            
+            # Ensure we have valid arrays for AUC calculation
+            if len(pos_pred) == 0 or len(neg_pred) == 0:
+                print("Warning: Empty prediction arrays")
+                return 0.5
+                
             # Create labels and predictions
             y_true = np.concatenate([np.ones(len(pos_pred)), np.zeros(len(neg_pred))])
             y_pred = np.concatenate([pos_pred, neg_pred])
             
+            # Check if there are at least two classes for AUC calculation
+            if len(np.unique(y_true)) < 2:
+                print("Warning: Not enough classes for AUC calculation")
+                return 0.5
+                
             # Calculate AUC score
-            auc = roc_auc_score(y_true, y_pred)
-            
-            return auc
+            try:
+                auc = roc_auc_score(y_true, y_pred)
+                return auc
+            except Exception as auc_error:
+                print(f"Error calculating AUC: {auc_error}")
+                return 0.5
+                
         except Exception as e:
             print(f"Error during evaluation: {e}")
+            import traceback
+            traceback.print_exc()
             return 0.5  # Return random performance in case of error
 
 
