@@ -194,7 +194,7 @@ def evaluate(model, x, edge_index, edge_attr=None, device='cpu'):
             return 0.5  # Return random performance in case of error
 
 
-def predict(model, x, edge_index, edge_attr=None, target_edge_index=None, device='cpu'):
+def predict(model, x, edge_index, edge_attr=None, target_edge_index=None, device='cpu', temperature=3.0):
     """
     Make predictions on target edges.
     
@@ -205,6 +205,7 @@ def predict(model, x, edge_index, edge_attr=None, target_edge_index=None, device
         edge_attr: Edge attributes (optional)
         target_edge_index: Target edge indices to predict on
         device: Device to run prediction on
+        temperature: Temperature scaling factor to soften predictions
         
     Returns:
         Probability predictions for target edges
@@ -235,17 +236,55 @@ def predict(model, x, edge_index, edge_attr=None, target_edge_index=None, device
             if hasattr(model, 'decode'):
                 # Use decode method if available
                 logits = model.decode(z, target_edge_index)
+                # Apply temperature scaling to soften predictions
+                # For temperature scaling, divide by temperature (not multiply)
+                # Higher temperature -> softer predictions
+                logits = logits / temperature
                 pred = torch.sigmoid(logits.clamp(max=10, min=-10)).cpu().numpy()
             elif hasattr(model, 'predict_link'):
                 # Use predict_link method if available
                 if edge_attr is not None and hasattr(model, 'predict_link') and 'edge_attr' in model.predict_link.__code__.co_varnames:
-                    pred = model.predict_link(x, edge_index, edge_attr, target_edge_index).cpu().numpy()
+                    # Apply temperature scaling to the output of predict_link
+                    raw_pred = model.predict_link(x, edge_index, edge_attr, target_edge_index)
+                    # Convert to logits by inverse sigmoid: logit = log(p/(1-p))
+                    logits = torch.log(raw_pred / (1 - raw_pred + 1e-7) + 1e-7)
+                    # Apply temperature
+                    logits = logits / temperature
+                    # Back to probabilities
+                    pred = torch.sigmoid(logits).cpu().numpy()
                 else:
-                    pred = model.predict_link(z, target_edge_index).cpu().numpy()
+                    # Apply same logic here
+                    raw_pred = model.predict_link(z, target_edge_index)
+                    logits = torch.log(raw_pred / (1 - raw_pred + 1e-7) + 1e-7)
+                    logits = logits / temperature
+                    pred = torch.sigmoid(logits).cpu().numpy()
             else:
                 # Fallback to basic inner product method
                 row, col = target_edge_index
-                pred = torch.sigmoid((z[row] * z[col]).sum(dim=-1).clamp(max=10, min=-10)).cpu().numpy()
+                # Apply temperature scaling
+                logits = (z[row] * z[col]).sum(dim=-1) / temperature
+                pred = torch.sigmoid(logits.clamp(max=10, min=-10)).cpu().numpy()
+            
+            # Apply calibration to predictions to avoid extreme values
+            # This clips extreme values and ensures better distribution
+            pred = np.clip(pred, 0.01, 0.99)
+            
+            # Enhanced normalization for better prediction distribution
+            pred_mean = np.mean(pred)
+            pred_std = np.std(pred)
+            
+            # If predictions are too concentrated (small std or near extremes)
+            if pred_std < 0.2 or pred_mean > 0.9 or pred_mean < 0.1:
+                # More aggressive normalization to create better distribution
+                if pred_mean > 0.5:
+                    # Most predictions are high, create more variance on the high end
+                    pred = 0.5 + (pred - pred_mean) * 3
+                else:
+                    # Most predictions are low, create more variance on the low end
+                    pred = 0.5 - (pred_mean - pred) * 3
+                
+                # Re-clip to valid probability range with wider range
+                pred = np.clip(pred, 0.05, 0.95)
                 
             return pred
             
@@ -260,7 +299,7 @@ def predict(model, x, edge_index, edge_attr=None, target_edge_index=None, device
             else:
                 num_edges = edge_index.size(1)
                 
-            return np.random.uniform(0, 1, num_edges)
+            return np.random.uniform(0.01, 0.99, num_edges)
 
 
 def plot_training_history(history):

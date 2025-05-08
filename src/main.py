@@ -31,6 +31,7 @@ def parse_args():
     parser.add_argument('--window_size', type=int, default=86400 * 7, help='Time window size in seconds (default: 7 days)')
     parser.add_argument('--stride', type=int, default=86400 * 7, help='Stride between consecutive windows in seconds')
     parser.add_argument('--max_windows', type=int, default=5, help='Maximum number of time windows to process')
+    parser.add_argument('--temperature', type=float, default=3.0, help='Temperature scaling for predictions')
     parser.add_argument('--no_cuda', action='store_true', default=False, help='Disables CUDA training')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--test_mode', action='store_true', default=False, help='Test mode')
@@ -169,7 +170,8 @@ def main():
             edge_index=edge_index,
             edge_attr=edge_attr,
             target_edge_index=target_edge_index,
-            device=device
+            device=device,
+            temperature=args.temperature
         )
         
         # Write predictions to output file

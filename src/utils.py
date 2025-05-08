@@ -134,11 +134,40 @@ def prepare_test_data(input_file, node_mapping):
     Returns:
         processed test data
     """
-    test_df = pd.read_csv(input_file)
+    # Test file has the same format as the training file but no header
+    # Columns: src_id, dst_id, edge_type, timestamp_start, timestamp_end, label
+    test_df = pd.read_csv(input_file, header=None)
+    
+    # Assign column names based on the format
+    if len(test_df.columns) == 6:
+        test_df.columns = ['source', 'target', 'edge_type', 'timestamp_start', 'timestamp_end', 'label']
+    elif len(test_df.columns) == 4:
+        test_df.columns = ['source', 'target', 'edge_type', 'timestamp']
+    else:
+        raise ValueError(f"Unexpected number of columns in test file: {len(test_df.columns)}")
     
     # Map node IDs to consecutive integers
     test_df['source_mapped'] = test_df['source'].map(node_mapping)
     test_df['target_mapped'] = test_df['target'].map(node_mapping)
+    
+    # Check for unmapped nodes
+    missing_sources = test_df[test_df['source_mapped'].isna()]['source'].unique()
+    missing_targets = test_df[test_df['target_mapped'].isna()]['target'].unique()
+    
+    if len(missing_sources) > 0 or len(missing_targets) > 0:
+        print(f"Warning: {len(missing_sources)} source nodes and {len(missing_targets)} target nodes in test data not found in training data")
+        # Fill missing mappings with random values (not ideal but allows the code to run)
+        max_node_id = max(node_mapping.values())
+        for node_id in missing_sources:
+            node_mapping[node_id] = max_node_id + 1
+            max_node_id += 1
+        for node_id in missing_targets:
+            node_mapping[node_id] = max_node_id + 1
+            max_node_id += 1
+        
+        # Remap with the updated mapping
+        test_df['source_mapped'] = test_df['source'].map(node_mapping)
+        test_df['target_mapped'] = test_df['target'].map(node_mapping)
     
     return test_df
 

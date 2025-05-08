@@ -120,13 +120,6 @@ def prepare_link_prediction_data(temporal_graphs, val_ratio=0.15, test_ratio=0.1
 def process_test_data(test_df, data_dict):
     """
     Process test data for prediction.
-    
-    Args:
-        test_df: DataFrame containing test pairs
-        data_dict: Dictionary with preprocessed data
-        
-    Returns:
-        PyTorch Geometric Data object for test data
     """
     node_features = torch.FloatTensor(data_dict['node_features'])
     num_nodes = node_features.shape[0]
@@ -134,9 +127,23 @@ def process_test_data(test_df, data_dict):
     # Create edge index tensor
     edge_index = torch.tensor(test_df[['source_mapped', 'target_mapped']].values.T, dtype=torch.long)
     
-    # Create edge attributes if available
+    # Create edge attributes based on available columns
     if 'edge_type' in test_df.columns:
-        edge_attr = torch.tensor(test_df['edge_type'].values.reshape(-1, 1), dtype=torch.float)
+        if 'timestamp' in test_df.columns:
+            # Both edge_type and timestamp
+            edge_attr = torch.tensor(np.column_stack([
+                test_df['edge_type'].values,
+                test_df['timestamp'].values
+            ]), dtype=torch.float)
+        elif 'timestamp_start' in test_df.columns:
+            # edge_type and timestamp_start
+            edge_attr = torch.tensor(np.column_stack([
+                test_df['edge_type'].values,
+                test_df['timestamp_start'].values
+            ]), dtype=torch.float)
+        else:
+            # Only edge_type
+            edge_attr = torch.tensor(test_df['edge_type'].values.reshape(-1, 1), dtype=torch.float)
     else:
         edge_attr = None
     

@@ -93,8 +93,22 @@ class TemporalGCN(TemporalGNN):
         
         return x
     
-    def forward(self, edge_index):
-        return self.decode(self.node_embeddings, edge_index)
+    def forward(self, x=None, edge_index=None, edge_attr=None):
+        """
+        Forward pass for link prediction.
+        Args:
+            x: Node features
+            edge_index: Edge indices for link prediction
+            edge_attr: Edge features
+        """
+        if edge_index is None:
+            raise ValueError("edge_index must be provided")
+        
+        # Encode the input features to get node embeddings
+        node_embeddings = self.encode(x, edge_index, edge_attr)
+        
+        # Decode the embeddings to get link predictions
+        return self.decode(node_embeddings, edge_index)
     
     def predict_link(self, edge_index):
         return torch.sigmoid(self.forward(edge_index))
