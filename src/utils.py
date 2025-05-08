@@ -179,4 +179,10 @@ def write_predictions(output_file, predictions):
         output_file: Path to the output file
         predictions: Model predictions
     """
-    pd.DataFrame({'prediction': predictions}).to_csv(output_file, index=False) 
+    # Convert predictions to a specific format with maximum 4 decimal places
+    formatted_predictions = [f"{p:.4f}" for p in predictions]
+    
+    # Write predictions directly to file without header and DataFrame
+    with open(output_file, 'w') as f:
+        for pred in formatted_predictions:
+            f.write(f"{pred}\n") 

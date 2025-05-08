@@ -11,7 +11,7 @@ def parse_args():
     parser.add_argument('--cuda', action='store_true', help='Use CUDA if available')
     parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--hidden_dim', type=int, default=128, help='Hidden dimension size')
-    parser.add_argument('--temperature', type=float, default=15.0, help='Temperature scaling for predictions')
+    parser.add_argument('--temperature', type=float, default=30.0, help='Temperature scaling for predictions')
     
     return parser.parse_args()
 

@@ -73,7 +73,14 @@ class TemporalGCN(TemporalGNN):
     
     def encode(self, x, edge_index, edge_attr=None):
         if self.edge_encoder is not None and edge_attr is not None:
-            edge_embedding = self.edge_encoder(edge_attr)
+            # Check if edge_attr is multidimensional and needs reshaping
+            if len(edge_attr.shape) > 1 and edge_attr.shape[1] > 1:
+                # Use only the first feature (edge type) or reshape as needed
+                # This is a temporary solution for the shape mismatch
+                edge_attr_processed = edge_attr[:, 0].unsqueeze(1)  # Use only first feature
+                edge_embedding = self.edge_encoder(edge_attr_processed)
+            else:
+                edge_embedding = self.edge_encoder(edge_attr)
         else:
             edge_embedding = None
         
