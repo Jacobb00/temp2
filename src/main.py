@@ -20,16 +20,17 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Temporal Link Prediction')
     parser.add_argument('--data_dir', type=str, default='data', help='Directory containing the datasets')
     parser.add_argument('--model', type=str, default='tgnn', help='Model type: tgnn, edge_gnn, or gcn')
-    parser.add_argument('--hidden_dim', type=int, default=128, help='Hidden dimension size')
-    parser.add_argument('--output_dim', type=int, default=64, help='Output dimension size')
+    parser.add_argument('--hidden_dim', type=int, default=64, help='Hidden dimension size')
+    parser.add_argument('--output_dim', type=int, default=32, help='Output dimension size')
     parser.add_argument('--num_layers', type=int, default=2, help='Number of GNN layers')
     parser.add_argument('--dropout', type=float, default=0.3, help='Dropout rate')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
     parser.add_argument('--weight_decay', type=float, default=0.0001, help='Weight decay')
     parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--patience', type=int, default=10, help='Patience for early stopping')
-    parser.add_argument('--window_size', type=int, default=86400, help='Time window size in seconds (default: 1 day)')
-    parser.add_argument('--stride', type=int, default=86400, help='Stride between consecutive windows in seconds')
+    parser.add_argument('--window_size', type=int, default=86400 * 7, help='Time window size in seconds (default: 7 days)')
+    parser.add_argument('--stride', type=int, default=86400 * 7, help='Stride between consecutive windows in seconds')
+    parser.add_argument('--max_windows', type=int, default=5, help='Maximum number of time windows to process')
     parser.add_argument('--no_cuda', action='store_true', default=False, help='Disables CUDA training')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--test_mode', action='store_true', default=False, help='Test mode')
@@ -67,6 +68,11 @@ def main():
     # Create time windows
     print("Creating time windows...")
     time_windows = create_time_windows(data_dict['edges_df'], args.window_size, args.stride)
+    
+    # Limit number of time windows to process
+    if len(time_windows) > args.max_windows:
+        print(f"Limiting to {args.max_windows} time windows (out of {len(time_windows)})")
+        time_windows = time_windows[:args.max_windows]
     
     # Process data for temporal link prediction
     print("Processing temporal data...")
@@ -112,7 +118,7 @@ def main():
             edge_dim=edge_features_dim
         )
     
-    # Set up optimizer
+    # Set up optimizer with gradient clipping
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     
     if args.test_mode:
@@ -129,23 +135,27 @@ def main():
             print("Loaded saved model.")
         else:
             print("No saved model found. Training a new model...")
-            # Train the model on all data
-            train_data, val_data, _ = data_splits[0]  # Use the first time window for simplicity
-            model, history = train_model(
-                model=model,
-                train_data=train_data,
-                val_data=val_data,
-                optimizer=optimizer,
-                device=device,
-                epochs=args.epochs,
-                patience=args.patience
-            )
-            # Save the model
-            torch.save(model.state_dict(), 'saved_model.pt')
-            print("Model saved.")
-            
-            # Plot training history
-            plot_training_history(history)
+            # Train the model on a single time window
+            if data_splits:
+                train_data, val_data, _ = data_splits[0]  # Use the first time window for simplicity
+                model, history = train_model(
+                    model=model,
+                    train_data=train_data,
+                    val_data=val_data,
+                    optimizer=optimizer,
+                    device=device,
+                    epochs=args.epochs,
+                    patience=args.patience
+                )
+                # Save the model
+                torch.save(model.state_dict(), 'saved_model.pt')
+                print("Model saved.")
+                
+                # Plot training history
+                plot_training_history(history)
+            else:
+                print("No valid data splits found. Cannot train a model.")
+                return
         
         # Make predictions
         x = test_graph.x
@@ -176,34 +186,37 @@ def main():
         best_model_state = None
         
         # Train the model for each time window
-        for i, (train_data, val_data, test_data) in enumerate(data_splits):
-            print(f"Training on time window {i+1}/{len(data_splits)}...")
+        if data_splits:
+            for i, (train_data, val_data, test_data) in enumerate(data_splits):
+                print(f"Training on time window {i+1}/{len(data_splits)}...")
+                
+                model, history = train_model(
+                    model=model,
+                    train_data=train_data,
+                    val_data=val_data,
+                    optimizer=optimizer,
+                    device=device,
+                    epochs=args.epochs,
+                    patience=args.patience
+                )
+                
+                # Check if this model is better than previous ones
+                val_auc = history['val_auc'][-1] if history['val_auc'] else 0
+                if val_auc > best_val_auc:
+                    best_val_auc = val_auc
+                    best_epoch = i
+                    best_model_state = {key: value.cpu().clone() for key, value in model.state_dict().items()}
             
-            model, history = train_model(
-                model=model,
-                train_data=train_data,
-                val_data=val_data,
-                optimizer=optimizer,
-                device=device,
-                epochs=args.epochs,
-                patience=args.patience
-            )
+            # Save the best model
+            if best_model_state is not None:
+                model.load_state_dict(best_model_state)
+                torch.save(model.state_dict(), 'saved_model.pt')
+                print(f"Best model from time window {best_epoch+1} saved with validation AUC: {best_val_auc:.4f}")
             
-            # Check if this model is better than previous ones
-            val_auc = history['val_auc'][-1]
-            if val_auc > best_val_auc:
-                best_val_auc = val_auc
-                best_epoch = i
-                best_model_state = {key: value.cpu().clone() for key, value in model.state_dict().items()}
-        
-        # Save the best model
-        if best_model_state is not None:
-            model.load_state_dict(best_model_state)
-            torch.save(model.state_dict(), 'saved_model.pt')
-            print(f"Best model from time window {best_epoch+1} saved with validation AUC: {best_val_auc:.4f}")
-        
-        # Plot training history
-        plot_training_history(history)
+            # Plot training history
+            plot_training_history(history)
+        else:
+            print("No valid data splits found. Cannot train a model.")
 
 if __name__ == "__main__":
     start_time = time.time()

@@ -247,17 +247,38 @@ class TGNNModel(torch.nn.Module):
     
     def forward(self, x, edge_index, edge_attr):
         # Extract edge features and timestamps
-        edge_features = edge_attr[:, :-1]  # All but the last column
-        timestamps = edge_attr[:, -1]      # Last column contains timestamps
-        
+        if edge_attr.shape[1] > 1:
+            edge_features = edge_attr[:, :-1]  # All but the last column
+            timestamps = edge_attr[:, -1]      # Last column contains timestamps
+        else:
+            # If there's only one feature, it's the edge type
+            edge_features = edge_attr
+            timestamps = torch.ones_like(edge_attr[:, 0])  # Use default timestamp
+            
         # Encode timestamps
         time_embeddings = self.time_encoder(timestamps)
         
         # Encode node features
         x = self.node_embedding(x)
         
+        # Ensure proper dimensions for concatenation
+        if len(edge_features.shape) == 1:
+            edge_features = edge_features.unsqueeze(1)
+            
+        # Ensure all tensors have proper shapes for concatenation
+        if time_embeddings.shape[0] != edge_features.shape[0]:
+            # Handle mismatch
+            if time_embeddings.shape[0] > edge_features.shape[0]:
+                time_embeddings = time_embeddings[:edge_features.shape[0]]
+            else:
+                # Pad edge_features
+                padding = torch.zeros(time_embeddings.shape[0] - edge_features.shape[0], 
+                                     edge_features.shape[1], 
+                                     device=edge_features.device)
+                edge_features = torch.cat([edge_features, padding], dim=0)
+                
         # Encode edge features with time
-        edge_emb = self.edge_embedding(torch.cat([edge_features, time_embeddings], dim=-1))
+        edge_emb = self.edge_embedding(torch.cat([edge_features, time_embeddings], dim=1))
         
         # Apply GNN layers
         for i, conv in enumerate(self.convs[:-1]):
@@ -305,15 +326,26 @@ class TimeEncoder(torch.nn.Module):
         self.reset_parameters()
     
     def reset_parameters(self):
-        torch.nn.init.xavier_uniform_(self.w)
+        # Use small values for initialization to prevent overflow
+        torch.nn.init.normal_(self.w, mean=0.0, std=0.1)
         torch.nn.init.constant_(self.b, 0)
     
     def forward(self, t):
-        # Convert timestamps to time differences (can be a fixed reference point)
-        # Normalize timestamps
-        t = t.unsqueeze(1).float()
+        # Normalize timestamps to prevent numerical issues
+        t_min = t.min()
+        t_max = t.max()
+        if t_max > t_min:
+            t_normalized = (t - t_min) / (t_max - t_min)
+        else:
+            t_normalized = torch.zeros_like(t)
+            
+        # Add small epsilon to avoid exact zeros
+        t_normalized = t_normalized + 1e-6
         
-        # Apply periodic encoding
-        output = torch.cos(self.w * t + self.b)
+        # Convert to proper shape
+        t_normalized = t_normalized.unsqueeze(1).float()
+        
+        # Apply periodic encoding with clipping to ensure stability
+        output = torch.cos(self.w.clamp(min=-5.0, max=5.0) * t_normalized + self.b)
         
         return output 
